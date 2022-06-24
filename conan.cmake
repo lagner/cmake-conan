@@ -235,7 +235,33 @@ macro(_conan_detect_compiler)
 
 endmacro()
 
-function(_conan_create_android_toolchain result)
+macro(_conan_setup_host_profile_path)
+    string(TOLOWER ${ARG_BUILD_TYPE} SUFFIX)
+    set(SUFFIX "-${SUFFIX}")
+    set(RESULT_PROFILE_PATH "${CMAKE_BINARY_DIR}/conan-profile${SUFFIX}")
+    message(STATUS "Conan: Generate ${CMAKE_SYSTEM_NAME} host profile ${RESULT_PROFILE_PATH}")
+endmacro()
+
+macro(_conan_profile_base_include)
+    set(CONAN_PROFILE_BASE_INCLUDE "")
+    if (ARG_BASE_PROFILE)
+        # fixme: not only path is supported
+        set(CONAN_PROFILE_BASE_INCLUDE "include(${ARG_BASE_PROFILE})")
+        #if (EXISTS "${ARG_BASE_PROFILE_PATH}")
+        #    file(RELATIVE_PATH rel_path ${CMAKE_BINARY_DIR} ${ARG_BASE_PROFILE_PATH})
+        #else()
+        #    message(FATAL_ERROR "Conan: Impossible to use base host profile ${ARG_BASE_PROFILE_PATH}. File does not exist")
+        #endif()
+    endif()
+endmacro()
+
+macro(_conan_toolchain_forward_var var)
+    if (DEFINED ${var})
+        list(APPEND TOOLCHAIN_BODY "set(${var} \"${${var}}\")")
+    endif()
+endmacro()
+
+function(_conan_create_android_toolchain ARG_RESULT_TOOLCHAIN_PATH)
     if (NOT DEFINED ANDROID_ABI)
         message(FATAL_ERROR "ANDROID_ABI is required to build for Android")
     endif()
@@ -246,16 +272,11 @@ function(_conan_create_android_toolchain result)
         message(FATAL_ERROR "ANDROID_NDK directory is required to build for Android")
     endif()
 
-    macro(_forward_var var)
-        if (DEFINED ${var})
-            list(APPEND TOOLCHAIN_BODY "set(${var} \"${${var}}\")")
-        endif()
-    endmacro()
-    _forward_var(ANDROID_ABI)
-    _forward_var(ANDROID_PLATFORM)
-    _forward_var(ANDROID_LD)
-    _forward_var(ANDROID_STL)
-    _forward_var(ANDROID_CPP_FEATURES)
+    _conan_toolchain_forward_var(ANDROID_ABI)
+    _conan_toolchain_forward_var(ANDROID_PLATFORM)
+    _conan_toolchain_forward_var(ANDROID_LD)
+    _conan_toolchain_forward_var(ANDROID_STL)
+    _conan_toolchain_forward_var(ANDROID_CPP_FEATURES)
 
     list(APPEND TOOLCHAIN_BODY "include(\"${ANDROID_NDK}/build/cmake/android.toolchain.cmake\")\n")
     list(JOIN TOOLCHAIN_BODY "\n" CONTENT)
@@ -265,12 +286,12 @@ function(_conan_create_android_toolchain result)
 
     file(WRITE ${TOOLCHAIN_PATH} ${CONTENT})
 
-    set(${result} ${TOOLCHAIN_PATH} PARENT_SCOPE)
+    set(${ARG_RESULT_TOOLCHAIN_PATH} ${TOOLCHAIN_PATH} PARENT_SCOPE)
 endfunction()
 
-function(_conan_create_android_profile result)
-    set(options BUILD_TYPE PROFILE_HOST)
-    cmake_parse_arguments(ARG "" "${options}" "" ${ARGN})
+function(_conan_create_android_profile ARG_RESULT_PROFILE_PATH ARG_BUILD_TYPE)
+    set(options BASE_PROFILE)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "${options}" "")
 
     macro(_set_abi_dependent_names abi binutils_prefix compiler_prefix)
         set(CONAN_HOST_ARCH ${abi})
@@ -292,25 +313,11 @@ function(_conan_create_android_profile result)
     string(REPLACE "." ";" VERSION_LIST ${CMAKE_CXX_COMPILER_VERSION})
     list(GET VERSION_LIST 0 CONAN_HOST_COMPILER_VERSION)
 
-    if (DEFINED ARG_BUILD_TYPE)
-        set(CONAN_BUILD_TYPE ${ARG_BUILD_TYPE})
-    elseif (DEFINED CMAKE_BUILD_TYPE)
-        set(CONAN_BUILD_TYPE ${CMAKE_BUILD_TYPE})
-    else()
-        message(FATAL_ERROR "Please specify in command line CMAKE_BUILD_TYPE (-DCMAKE_BUILD_TYPE=Release)")
-    endif()
-    set(BUILD_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel")
-    list(FIND BUILD_TYPES ${CONAN_BUILD_TYPE} IDX_FOUND)
-    if (NOT ${IDX_FOUND} GREATER -1)
-        message(FATAL_ERROR "Unexpected build type: ${CONAN_BUILD_TYPE}")
-    endif()
+    _conan_setup_host_profile_path()
+    _conan_profile_base_include()
 
-    string(TOLOWER ${CONAN_BUILD_TYPE} SUFFIX)
-    set(SUFFIX "-${SUFFIX}")
-    set(PROFILE_PATH "${CMAKE_BINARY_DIR}/conan-profile${SUFFIX}")
-    message(STATUS "Conan: Generate Android profile ${PROFILE_PATH}")
-
-    file(WRITE ${PROFILE_PATH} "\
+    file(WRITE ${RESULT_PROFILE_PATH} "\
+${CONAN_PROFILE_BASE_INCLUDE}
 compiler_prefix=${CONAN_HOST_COMPILER_PREFIX}
 binutils_prefix=${CONAN_HOST_BINUTILS_PREFIX}
 android_ndk=${CMAKE_ANDROID_NDK}
@@ -348,7 +355,83 @@ STRIP=$binutils_prefix-strip
 SYSROOT=$android_ndk/sysroot
 TARGET=$compiler_prefix
 ")
-    set(${result} ${PROFILE_PATH} PARENT_SCOPE)
+    set(${ARG_RESULT_PROFILE_PATH} ${RESULT_PROFILE_PATH} PARENT_SCOPE)
+endfunction()
+
+function(_conan_create_ios_toolchain ARG_RESULT_TOOLCHAIN_PATH)
+    if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+        message(FATAL_ERROR "Toolchain file is required to build for iOS")
+    endif()
+    if (NOT DEFINED PLATFORM)
+        message(FATAL_ERROR "PLATFORM is required to build for iOS")
+    endif()
+    if (NOT DEFINED DEPLOYMENT_TARGET)
+        message(FATAL_ERROR "DEPLOYMENT_TARGET is required to build for iOS")
+    endif()
+
+    _conan_toolchain_forward_var(PLATFORM)
+    _conan_toolchain_forward_var(DEPLOYMENT_TARGET)
+    _conan_toolchain_forward_var(ENABLE_BITCODE)
+
+    get_filename_component(ROOT_TOOLCHAIN_PATH ${CMAKE_TOOLCHAIN_FILE} REALPATH)
+
+    list(APPEND TOOLCHAIN_BODY "include(\"${ROOT_TOOLCHAIN_PATH}\")\n")
+    list(JOIN TOOLCHAIN_BODY "\n" CONTENT)
+
+    set(TOOLCHAIN_PATH "${CMAKE_BINARY_DIR}/conan.toolchain.cmake")
+    message(STATUS "Conan: Generate CMake iOS toolchain ${TOOLCHAIN_PATH}")
+
+    file(WRITE ${TOOLCHAIN_PATH} ${CONTENT})
+
+    set(${ARG_RESULT_TOOLCHAIN_PATH} ${TOOLCHAIN_PATH} PARENT_SCOPE)
+endfunction()
+
+function(_conan_create_ios_profile ARG_RESULT_PROFILE_PATH ARG_BUILD_TYPE)
+    set(options BASE_PROFILE)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "${options}" "")
+
+    string(REPLACE "." ";" VERSION_LIST ${CMAKE_CXX_COMPILER_VERSION})
+    list(GET VERSION_LIST 0 MAJOR)
+    list(GET VERSION_LIST 1 MINOR)
+    set(CONAN_PROFILE_COMPILER apple-clang)
+    set(CONAN_PROFILE_COMPILER_VERSION ${MAJOR}.${MINOR})
+    conan_cmake_detect_unix_libcxx(CONAN_PROFILE_COMPILER_LIBCXX)
+
+    if (PLATFORM STREQUAL "OS64")
+        set(CONAN_PROFILE_SDK "iphoneos")
+        set(CONAN_PROFILE_ARCH "armv8")
+    elseif (PLATFORM STREQUAL "SIMULATOR64")
+        set(CONAN_PROFILE_SDK "iphonesimulator")
+        set(CONAN_PROFILE_ARCH "x86_64")
+    elseif (PLATFORM STREQUAL "SIMULATORARM64")
+        set(CONAN_PROFILE_SDK "iphonesimulator")
+        set(CONAN_PROFILE_ARCH "armv8")
+    else()
+        message(FATAL_ERROR "Conan: iOS Platform ${PLATFORM} is not supported")
+    endif()
+
+    _conan_setup_host_profile_path()
+    _conan_profile_base_include()
+
+    file(WRITE ${RESULT_PROFILE_PATH} "\
+${CONAN_PROFILE_BASE_INCLUDE}
+[settings]
+os=${CMAKE_SYSTEM_NAME}
+os.version=${DEPLOYMENT_TARGET}
+os.sdk=${CONAN_PROFILE_SDK}
+arch=${CONAN_PROFILE_ARCH}
+
+compiler=${CONAN_PROFILE_COMPILER}
+compiler.version=${CONAN_PROFILE_COMPILER_VERSION}
+compiler.libcxx=${CONAN_PROFILE_COMPILER_LIBCXX}
+cppstd=${CMAKE_CXX_STANDARD}
+
+build_type=${CONAN_BUILD_TYPE}
+
+[env]
+CONAN_CMAKE_TOOLCHAIN_FILE=${CONAN_CMAKE_TOOLCHAIN_FILE}
+")
+    set(${ARG_RESULT_PROFILE_PATH} ${RESULT_PROFILE_PATH} PARENT_SCOPE)   
 endfunction()
 
 function(conan_cmake_settings result)
@@ -575,6 +658,62 @@ function(conan_cmake_generate_android_profile result)
     _conan_create_android_profile(CONAN_ANDROID_PROFILE ${ARGN})
 
     set(${result} ${CONAN_ANDROID_PROFILE} PARENT_SCOPE)
+endfunction()
+
+
+macro(_conan_get_build_type)
+    # fixme: move out common logic
+    if (DEFINED ARG_BUILD_TYPE)
+        set(CONAN_BUILD_TYPE ${ARG_BUILD_TYPE})
+    elseif (DEFINED CMAKE_BUILD_TYPE)
+        set(CONAN_BUILD_TYPE ${CMAKE_BUILD_TYPE})
+    else()
+        message(FATAL_ERROR "Please specify in command line CMAKE_BUILD_TYPE (-DCMAKE_BUILD_TYPE=Release)")
+    endif()
+    set(BUILD_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel")
+    list(FIND BUILD_TYPES ${CONAN_BUILD_TYPE} IDX_FOUND)
+    if (NOT ${IDX_FOUND} GREATER -1)
+        message(FATAL_ERROR "Unexpected build type: ${CONAN_BUILD_TYPE}")
+    endif()
+endmacro()
+
+function(conan_cmake_generate_host_profile ARG_RESULT_HOST_PROFILE)
+    # check if cross compilation for Android or iOS
+    # print warning and use default if not
+
+    set(oneValueArgs BASE_HOST_PROFILE BUILD_TYPE)
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "${oneValueArgs}" "")
+
+    if (DEFINED ARG_BUILD_TYPE)
+        set(CONAN_BUILD_TYPE ${ARG_BUILD_TYPE})
+    elseif (DEFINED CMAKE_BUILD_TYPE)
+        set(CONAN_BUILD_TYPE ${CMAKE_BUILD_TYPE})
+    else()
+        message(FATAL_ERROR "Please specify in command line CMAKE_BUILD_TYPE (-DCMAKE_BUILD_TYPE=Release)")
+    endif()
+    set(BUILD_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel")
+    list(FIND BUILD_TYPES ${CONAN_BUILD_TYPE} IDX_FOUND)
+    if (NOT ${IDX_FOUND} GREATER -1)
+        message(FATAL_ERROR "Unexpected build type: ${CONAN_BUILD_TYPE}")
+    endif()
+
+    message(STATUS "Conan: ARG_RESULT_HOST_PROFILE: ${ARG_RESULT_HOST_PROFILE}")
+    message(STATUS "Conan: BUILD_TYPE: ${CONAN_BUILD_TYPE}")
+    message(STATUS "Conan: ARG_BASE_HOST_PROFILE: ${ARG_BASE_HOST_PROFILE}")
+
+    if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        _conan_create_ios_toolchain(CONAN_CMAKE_TOOLCHAIN_FILE)
+        _conan_create_ios_profile(CONAN_CMAKE_HOST_PROFILE ${CONAN_BUILD_TYPE} BASE_PROFILE ${ARG_BASE_HOST_PROFILE})
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        _conan_create_android_toolchain(CONAN_CMAKE_TOOLCHAIN_FILE)
+        _conan_create_android_profile(CONAN_CMAKE_HOST_PROFILE ${CONAN_BUILD_TYPE} BASE_PROFILE ${ARG_BASE_HOST_PROFILE})
+    else()
+        message(FATAL_ERROR "Conan: Can generate host profile for Android or iOS only")
+    endif()
+
+    message(STATUS "Conan: output ${ARG_RESULT_HOST_PROFILE} is ${CONAN_CMAKE_HOST_PROFILE}")
+
+    set(${ARG_RESULT_HOST_PROFILE} ${CONAN_CMAKE_HOST_PROFILE} PARENT_SCOPE)
 endfunction()
 
 macro(conan_parse_arguments)

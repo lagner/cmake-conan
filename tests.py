@@ -1159,7 +1159,7 @@ class AndroidTests(unittest.TestCase):
     def setUp(self):
         self.old_folder = os.getcwd()
         CONAN_TEST_FOLDER = os.getenv('CONAN_TEST_FOLDER', None)
-        folder = tempfile.mkdtemp(suffix='conan', dir=CONAN_TEST_FOLDER)
+        folder = tempfile.mkdtemp(suffix='-android-conan', dir=CONAN_TEST_FOLDER)
         shutil.copy2("conan.cmake", os.path.join(folder, "conan.cmake"))
         shutil.copy2("main.cpp", os.path.join(folder, "main.cpp"))
         os.chdir(folder)
@@ -1189,18 +1189,13 @@ class AndroidTests(unittest.TestCase):
             set(CMAKE_CXX_STANDARD 14)
             set(CMAKE_CXX_STANDARD_REQUIRED ON)
             include(conan.cmake)
+
             conan_cmake_configure(REQUIRES fmt/6.1.2)
-            if (CMAKE_SYSTEM_NAME STREQUAL "Android")
-                conan_cmake_generate_android_profile(profile_host)
-            else()
-                conan_cmake_autodetect(settings)
-            endif()
+            conan_cmake_generate_host_profile(profile_host)
 
             conan_cmake_install(PATH_OR_REFERENCE .
                                 GENERATOR cmake
                                 BUILD missing
-                                REMOTE conancenter
-                                SETTINGS ${settings}
                                 PROFILE_BUILD default
                                 PROFILE_HOST ${profile_host}
                                 )
@@ -1229,6 +1224,44 @@ class AndroidTests(unittest.TestCase):
                     run("cmake ../../.. {} ".format(generator) + cmake_args)
                     run("cmake --build .")
 
+    def test_conan_android_with_base_profile(self):
+        content = textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.5)
+            project(FormatOutput CXX)
+            set(CMAKE_CXX_STANDARD 14)
+            set(CMAKE_CXX_STANDARD_REQUIRED ON)
+            include(conan.cmake)
+
+            conan_cmake_configure(REQUIRES fmt/6.1.2)
+            conan_cmake_generate_host_profile(
+                profile_host
+                BASE_HOST_PROFILE ${CMAKE_CURRENT_SOURCE_DIR}/base_profile)
+
+            conan_cmake_install(PATH_OR_REFERENCE .
+                                GENERATOR cmake
+                                BUILD missing
+                                PROFILE_BUILD default
+                                PROFILE_HOST ${profile_host}
+                                )
+            include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+            conan_basic_setup(TARGETS)
+
+            add_library(main SHARED main.cpp)
+            target_link_libraries(main CONAN_PKG::fmt)
+        """)
+        save("CMakeLists.txt", content)
+        profile = textwrap.dedent("""
+            [options]
+            fmt:header_only=True
+        """)
+        save("base_profile", profile)
+
+        os.makedirs("build")
+        os.chdir("build")
+
+        run("cmake .. {} ".format(generator) + self.cmake_android_args(build_type="RelWithDebInfo"))
+        run("cmake --build .")
+
     def test_conan_android_ninja_multi(self):
         content = textwrap.dedent("""
             cmake_minimum_required(VERSION 3.17)
@@ -1241,7 +1274,8 @@ class AndroidTests(unittest.TestCase):
             conan_cmake_configure(REQUIRES fmt/6.1.2 GENERATORS cmake_find_package_multi)
 
             foreach(TYPE ${CMAKE_CONFIGURATION_TYPES})
-                conan_cmake_generate_android_profile(profile_host
+                conan_cmake_generate_host_profile(
+                    profile_host
                     BUILD_TYPE ${TYPE})
                 conan_cmake_install(
                     PATH_OR_REFERENCE .
@@ -1269,3 +1303,150 @@ class AndroidTests(unittest.TestCase):
         for variant in build_types:
             with self.subTest(variant = variant):
                 run("cmake --build . --config {}".format(variant))
+
+
+@unittest.skipIf(platform.system() != "Darwin", "iOS libraries building is available on MacOS only")
+class iOSTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        CONAN_TEST_FOLDER = os.getenv('CONAN_TEST_FOLDER', None)
+        folder = tempfile.mkdtemp(suffix="-ios-conan", dir=CONAN_TEST_FOLDER)
+
+        toolchain = os.path.join(folder, "ios.toolchain.cmake")
+        script = os.path.join(folder, "bootstrap.cmake")
+        script_body = textwrap.dedent("""\
+            file(
+                DOWNLOAD "https://raw.githubusercontent.com/leetal/ios-cmake/4.2.0/ios.toolchain.cmake" 
+                ${IOS_TOOLCHAIN_PATH}
+                EXPECTED_HASH SHA256=d2861cfb550f81ed11ec115a2be6eca8efa9a0a350382bcaf18daa47f0106bbe
+                TLS_VERIFY ON)
+        """)
+        save(script, script_body)
+
+        run("cmake -DIOS_TOOLCHAIN_PATH={} -P {}".format(toolchain, script))
+        assert os.path.isfile(toolchain), "iOS toolchain file {} does not exist".format(toolchain)
+
+        cls.toolchain = toolchain
+        cls.root_dir = folder
+
+    def setUp(self):
+        self.old_folder = os.getcwd()
+        folder = tempfile.mkdtemp(dir=self.__class__.root_dir)
+
+        shutil.copy2("conan.cmake", os.path.join(folder, "conan.cmake"))
+        shutil.copy2("main.cpp", os.path.join(folder, "main.cpp"))
+
+        os.chdir(folder)
+        self.old_env = dict(os.environ)
+        os.environ.update({"CONAN_USER_HOME": folder})
+
+    def tearDown(self):
+        os.chdir(self.old_folder)
+        os.environ.clear()
+        os.environ.update(self.old_env)
+
+    def cmake_ios_args(self, platform="OS64", target="12.0", build_type=None):
+        args = [
+            "-DPLATFORM={}".format(platform),
+            "-DDEPLOYMENT_TARGET={}".format(target),
+            "-DCMAKE_TOOLCHAIN_FILE={}".format(self.__class__.toolchain)
+        ]
+        if build_type:
+            args.append("-DCMAKE_BUILD_TYPE={}".format(build_type))
+        return " ".join(args)
+
+    def test_conan_ios_build(self):
+        content = textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.5)
+            project(FormatOutput CXX)
+            set(CMAKE_CXX_STANDARD 14)
+            set(CMAKE_CXX_STANDARD_REQUIRED ON)
+            include(conan.cmake)
+
+            conan_cmake_configure(REQUIRES fmt/6.1.2)
+            conan_cmake_generate_host_profile(profile_host)
+
+            conan_cmake_install(PATH_OR_REFERENCE .
+                                GENERATOR cmake
+                                BUILD missing
+                                PROFILE_BUILD default
+                                PROFILE_HOST ${profile_host}
+                                )
+            include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+            conan_basic_setup(TARGETS)
+
+            add_library(main STATIC main.cpp)
+            target_link_libraries(main CONAN_PKG::fmt)
+        """)
+        save("CMakeLists.txt", content)
+
+        platforms = ("OS64", "SIMULATOR64", "SIMULATORARM64")
+        build_types = ("Release", "Debug", "RelWithDebInfo")
+
+        for variant in itertools.product(platforms, build_types):
+            with self.subTest(variant = variant):
+                platform = variant[0]
+                build_type = variant[1]
+
+                build_dir = os.path.join("build", platform, build_type)
+                os.makedirs(build_dir)
+
+                with pushd(build_dir):
+                    cmake_args = self.cmake_ios_args(
+                        platform = platform, 
+                        build_type = build_type
+                    )
+                    run("cmake ../../.. {} ".format(generator) + cmake_args)
+                    run("cmake --build .")
+
+    def test_conan_xcode_multi(self):
+        content = textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.14)
+            project(FormatOutput CXX)
+            list(APPEND CMAKE_FIND_ROOT_PATH ${CMAKE_BINARY_DIR})
+
+            set(CMAKE_CXX_STANDARD 14)
+            set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+            include(conan.cmake)
+            conan_cmake_configure(REQUIRES fmt/6.1.2 GENERATORS cmake_find_package_multi)
+
+            message(STATUS "Arch is ${ARCHS}")
+
+            foreach(TYPE ${CMAKE_CONFIGURATION_TYPES})
+                conan_cmake_generate_host_profile(
+                    profile_host
+                    BUILD_TYPE ${TYPE}
+                )
+
+                conan_cmake_install(
+                    PATH_OR_REFERENCE .
+                    BUILD missing
+                    REMOTE conancenter
+                    PROFILE_BUILD default
+                    PROFILE_HOST ${profile_host})
+            endforeach()
+
+            find_package(fmt CONFIG REQUIRED)
+
+            add_library(main STATIC main.cpp)
+            target_link_libraries(main fmt::fmt)
+
+            set_xcode_property(main CODE_SIGNING_REQUIRED NO all)
+            set_xcode_property(main CODE_SIGNING_ALLOWED NO all)
+        """)
+        save("CMakeLists.txt", content)
+
+        os.makedirs("build")
+        os.chdir("build")
+
+        cmake_args = self.cmake_ios_args()
+        run("cmake .. -G Xcode " + cmake_args)
+
+        build_types = ("Release", "Debug", "RelWithDebInfo")
+
+        for variant in build_types:
+            with self.subTest(variant = variant):
+                run("cmake --build . --config {}".format(variant))
+
