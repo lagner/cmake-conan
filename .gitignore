@@ -31,3 +31,4 @@ build/
 *.pyc
 .conan
 .idea
+.vscode
