@@ -340,6 +340,7 @@ build_type=${CONAN_BUILD_TYPE}
 
 [conf]
 tools.android:ndk_path=${ANDROID_NDK_EXPECTED_PATH}
+tools.cmake.cmaketoolchain:toolchain_file=${CONAN_CMAKE_TOOLCHAIN_FILE}
 
 [env]
 # cmake
