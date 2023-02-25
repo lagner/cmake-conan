@@ -316,6 +316,9 @@ function(_conan_create_android_profile ARG_RESULT_PROFILE_PATH ARG_BUILD_TYPE)
     _conan_setup_host_profile_path()
     _conan_profile_base_include()
 
+    get_filename_component(ANDROID_NDK_EXPECTED_PATH ${CMAKE_TOOLCHAIN_FILE} DIRECTORY)
+    get_filename_component(ANDROID_NDK_EXPECTED_PATH "${ANDROID_NDK_EXPECTED_PATH}/../../" ABSOLUTE)
+
     file(WRITE ${RESULT_PROFILE_PATH} "\
 ${CONAN_PROFILE_BASE_INCLUDE}
 compiler_prefix=${CONAN_HOST_COMPILER_PREFIX}
@@ -334,6 +337,9 @@ compiler.version=${CONAN_HOST_COMPILER_VERSION}
 cppstd=${CMAKE_CXX_STANDARD}
 
 build_type=${CONAN_BUILD_TYPE}
+
+[conf]
+tools.android:ndk_path=${ANDROID_NDK_EXPECTED_PATH}
 
 [env]
 # cmake
